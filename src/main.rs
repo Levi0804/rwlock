@@ -1,7 +1,7 @@
 use std::cell::UnsafeCell;
 use std::ops::{Deref, DerefMut};
 use std::sync::atomic::AtomicIsize;
-use std::sync::atomic::Ordering::Relaxed;
+use std::sync::atomic::Ordering::{Acquire, Relaxed, Release};
 
 pub struct Rw<T> {
     data: UnsafeCell<T>,
@@ -24,7 +24,7 @@ impl<T> Rw<T> {
         loop {
             match self
                 .counter
-                .compare_exchange_weak(current, current + 1, Relaxed, Relaxed)
+                .compare_exchange_weak(current, current + 1, Acquire, Relaxed)
             {
                 Ok(_) => break,
                 Err(_) => {
@@ -42,7 +42,7 @@ impl<T> Rw<T> {
     pub fn write<'write>(&'write self) -> RwWriteGuard<'write, T> {
         while self
             .counter
-            .compare_exchange_weak(0, -1, Relaxed, Relaxed)
+            .compare_exchange_weak(0, -1, Acquire, Relaxed)
             .is_err()
         {
             std::hint::spin_loop();
@@ -70,7 +70,7 @@ impl<T> Drop for RwReadGuard<'_, T> {
             match self
                 .rw
                 .counter
-                .compare_exchange_weak(current, current - 1, Relaxed, Relaxed)
+                .compare_exchange_weak(current, current - 1, Release, Relaxed)
             {
                 Ok(_) => break,
                 Err(new) => current = new,
@@ -98,7 +98,7 @@ impl<T> DerefMut for RwWriteGuard<'_, T> {
 
 impl<T> Drop for RwWriteGuard<'_, T> {
     fn drop(&mut self) {
-        self.rw.counter.store(0, Relaxed);
+        self.rw.counter.store(0, Release);
     }
 }
 
