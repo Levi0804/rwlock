@@ -21,6 +21,11 @@ impl<T> Rw<T> {
 
     pub fn read<'read>(&'read self) -> RwReadGuard<'read, T> {
         let mut current = self.counter.load(Relaxed);
+
+        while self.counter.load(Relaxed) < 0 {
+            std::hint::spin_loop();
+        }
+
         loop {
             match self
                 .counter
