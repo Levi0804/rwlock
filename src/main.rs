@@ -21,22 +21,18 @@ impl<T> Rw<T> {
 
     pub fn read<'read>(&'read self) -> RwReadGuard<'read, T> {
         let mut current = self.counter.load(Relaxed);
-
-        while self.counter.load(Relaxed) < 0 {
-            std::hint::spin_loop();
-        }
-
         loop {
-            match self
-                .counter
-                .compare_exchange_weak(current, current + 1, Acquire, Relaxed)
-            {
-                Ok(_) => break,
-                Err(_) => {
-                    while self.counter.load(Relaxed) < 0 {
-                        std::hint::spin_loop();
+            if current < 0 {
+                current = self.counter.load(Relaxed);
+            } else {
+                match self
+                    .counter
+                    .compare_exchange_weak(current, current + 1, Acquire, Relaxed)
+                {
+                    Ok(_) => break,
+                    Err(next_prev) => {
+                        current = next_prev;
                     }
-                    current = self.counter.load(Relaxed);
                 }
             }
         }
@@ -72,13 +68,17 @@ impl<T> Drop for RwReadGuard<'_, T> {
     fn drop(&mut self) {
         let mut current = self.rw.counter.load(Relaxed);
         loop {
-            match self
-                .rw
-                .counter
-                .compare_exchange_weak(current, current - 1, Release, Relaxed)
-            {
-                Ok(_) => break,
-                Err(new) => current = new,
+            if current < 0 {
+                current = self.rw.counter.load(Relaxed);
+            } else {
+                match self
+                    .rw
+                    .counter
+                    .compare_exchange_weak(current, current - 1, Relaxed, Relaxed)
+                {
+                    Ok(_) => break,
+                    Err(new) => current = new,
+                }
             }
         }
     }
