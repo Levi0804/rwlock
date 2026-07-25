@@ -1,13 +1,14 @@
-use std::cell::UnsafeCell;
 use std::ops::{Deref, DerefMut};
-use std::sync::atomic::AtomicIsize;
-use std::sync::atomic::Ordering::{Acquire, Relaxed, Release};
+
+mod sync;
+use crate::sync::{Acquire, AtomicIsize, Relaxed, Release, UnsafeCell, spin_loop};
 
 pub struct Rw<T> {
     data: UnsafeCell<T>,
     counter: AtomicIsize,
 }
 
+// TODO
 unsafe impl<T> Send for Rw<T> where T: Send {}
 unsafe impl<T> Sync for Rw<T> where T: Send + Sync {}
 
@@ -35,6 +36,7 @@ impl<T> Rw<T> {
                     }
                 }
             }
+            spin_loop();
         }
 
         RwReadGuard { rw: self }
@@ -46,7 +48,7 @@ impl<T> Rw<T> {
             .compare_exchange_weak(0, -1, Acquire, Relaxed)
             .is_err()
         {
-            std::hint::spin_loop();
+            spin_loop();
         }
 
         RwWriteGuard { rw: self }
@@ -60,7 +62,14 @@ pub struct RwReadGuard<'read, T> {
 impl<T> Deref for RwReadGuard<'_, T> {
     type Target = T;
     fn deref(&self) -> &Self::Target {
-        unsafe { &*self.rw.data.get() }
+        #[cfg(not(feature = "loom"))]
+        unsafe {
+            &*self.rw.data.get()
+        }
+        #[cfg(feature = "loom")]
+        unsafe {
+            &*self.rw.data.with_mut(|p| p)
+        }
     }
 }
 
@@ -84,6 +93,10 @@ impl<T> Drop for RwReadGuard<'_, T> {
     }
 }
 
+// TODO:
+unsafe impl<T> Send for RwReadGuard<'_, T> {}
+unsafe impl<T> Sync for RwReadGuard<'_, T> {}
+
 pub struct RwWriteGuard<'write, T> {
     rw: &'write Rw<T>,
 }
@@ -91,13 +104,27 @@ pub struct RwWriteGuard<'write, T> {
 impl<T> Deref for RwWriteGuard<'_, T> {
     type Target = T;
     fn deref(&self) -> &Self::Target {
-        unsafe { &*self.rw.data.get() }
+        #[cfg(not(feature = "loom"))]
+        unsafe {
+            &*self.rw.data.get()
+        }
+        #[cfg(feature = "loom")]
+        unsafe {
+            &*self.rw.data.with_mut(|p| p)
+        }
     }
 }
 
 impl<T> DerefMut for RwWriteGuard<'_, T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        unsafe { &mut *self.rw.data.get() }
+        #[cfg(not(feature = "loom"))]
+        unsafe {
+            &mut *self.rw.data.get()
+        }
+        #[cfg(feature = "loom")]
+        unsafe {
+            &mut *self.rw.data.with_mut(|p| p)
+        }
     }
 }
 
@@ -107,7 +134,79 @@ impl<T> Drop for RwWriteGuard<'_, T> {
     }
 }
 
-fn main() {
+// TODO:
+unsafe impl<T> Send for RwWriteGuard<'_, T> {}
+unsafe impl<T> Sync for RwWriteGuard<'_, T> {}
+
+#[cfg(test)]
+#[cfg(feature = "loom")]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_rw_lock_read_write() {
+        loom::model(|| {
+            let rw: &'static _ = Box::leak(Box::new(Rw::new(0)));
+
+            let handle1 = loom::thread::spawn(|| {
+                let _r = rw.read();
+            });
+            let handle2 = loom::thread::spawn(|| {
+                let mut w = rw.write();
+                *w += 1;
+            });
+
+            handle1.join().unwrap();
+            handle2.join().unwrap();
+
+            assert_eq!(*rw.read(), 1);
+        });
+    }
+
+    #[test]
+    fn test_rw_lock_read_read() {
+        loom::model(|| {
+            let rw: &'static _ = Box::leak(Box::new(Rw::new(0)));
+
+            let handle1 = loom::thread::spawn(|| {
+                let _r = rw.read();
+            });
+            let handle2 = loom::thread::spawn(|| {
+                let _r = rw.read();
+            });
+
+            handle1.join().unwrap();
+            handle2.join().unwrap();
+
+            assert_eq!(*rw.read(), 0);
+        });
+    }
+
+    #[test]
+    fn test_rw_lock_write_write() {
+        loom::model(|| {
+            let rw: &'static _ = Box::leak(Box::new(Rw::new(0)));
+
+            let handle1 = loom::thread::spawn(|| {
+                let mut w = rw.write();
+                *w += 1;
+            });
+            let handle2 = loom::thread::spawn(|| {
+                let mut w = rw.write();
+                *w += 1;
+            });
+
+            handle1.join().unwrap();
+            handle2.join().unwrap();
+
+            assert_eq!(*rw.read(), 2);
+        });
+    }
+}
+
+#[test]
+#[cfg(not(feature = "loom"))]
+fn test_concurr_rw_lock_fuzzing() {
     let rw: &'static _ = Box::leak(Box::new(Rw::new(0)));
 
     std::thread::scope(|s| {
