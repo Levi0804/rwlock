@@ -1,4 +1,8 @@
-use std::ops::{Deref, DerefMut};
+use std::{
+    marker::PhantomData,
+    ops::{Deref, DerefMut},
+    sync::MutexGuard,
+};
 
 mod sync;
 use crate::sync::{Acquire, AtomicIsize, Relaxed, Release, UnsafeCell, spin_loop};
@@ -8,7 +12,6 @@ pub struct Rw<T> {
     counter: AtomicIsize,
 }
 
-// TODO
 unsafe impl<T> Send for Rw<T> where T: Send {}
 unsafe impl<T> Sync for Rw<T> where T: Send + Sync {}
 
@@ -39,7 +42,10 @@ impl<T> Rw<T> {
             spin_loop();
         }
 
-        RwReadGuard { rw: self }
+        RwReadGuard {
+            rw: self,
+            _p: PhantomData,
+        }
     }
 
     pub fn write<'write>(&'write self) -> RwWriteGuard<'write, T> {
@@ -51,12 +57,19 @@ impl<T> Rw<T> {
             spin_loop();
         }
 
-        RwWriteGuard { rw: self }
+        RwWriteGuard {
+            rw: self,
+            _p: PhantomData,
+        }
     }
 }
 
 pub struct RwReadGuard<'read, T> {
     rw: &'read Rw<T>,
+    // This field is to make it !Send because a lock can only
+    // be released from within the thread where it was created.
+    // Solution for now because we do not want to opt into negative impl nightly feature
+    _p: PhantomData<MutexGuard<'read, ()>>,
 }
 
 impl<T> Deref for RwReadGuard<'_, T> {
@@ -93,12 +106,14 @@ impl<T> Drop for RwReadGuard<'_, T> {
     }
 }
 
-// TODO:
 unsafe impl<T> Send for RwReadGuard<'_, T> {}
-unsafe impl<T> Sync for RwReadGuard<'_, T> {}
 
 pub struct RwWriteGuard<'write, T> {
     rw: &'write Rw<T>,
+    // This field is to make it !Send because a lock can only
+    // be released from within the thread where it was created.
+    // Solution for now because we do not want to opt into negative impl nightly feature
+    _p: PhantomData<MutexGuard<'write, ()>>,
 }
 
 impl<T> Deref for RwWriteGuard<'_, T> {
@@ -134,9 +149,7 @@ impl<T> Drop for RwWriteGuard<'_, T> {
     }
 }
 
-// TODO:
-unsafe impl<T> Send for RwWriteGuard<'_, T> {}
-unsafe impl<T> Sync for RwWriteGuard<'_, T> {}
+unsafe impl<T: Sync> Sync for RwWriteGuard<'_, T> {}
 
 #[cfg(test)]
 #[cfg(feature = "loom")]
