@@ -106,7 +106,7 @@ impl<T> Drop for RwReadGuard<'_, T> {
     }
 }
 
-unsafe impl<T> Send for RwReadGuard<'_, T> {}
+unsafe impl<T: Sync> Sync for RwReadGuard<'_, T> {}
 
 pub struct RwWriteGuard<'write, T> {
     rw: &'write Rw<T>,
