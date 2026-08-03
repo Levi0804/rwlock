@@ -5,7 +5,7 @@ use std::{
 };
 
 mod sync;
-use crate::sync::{Acquire, AtomicIsize, Relaxed, Release, UnsafeCell, spin_loop};
+use crate::sync::{Acquire, AtomicIsize, Relaxed, Release, UnsafeCell, fence, spin_loop};
 
 pub struct Rw<T> {
     data: UnsafeCell<T>,
@@ -31,9 +31,14 @@ impl<T> Rw<T> {
             } else {
                 match self
                     .counter
-                    .compare_exchange_weak(current, current + 1, Acquire, Relaxed)
+                    .compare_exchange_weak(current, current + 1, Relaxed, Relaxed)
                 {
-                    Ok(_) => break,
+                    Ok(v) => {
+                        if v == 1 {
+                            fence(Acquire);
+                        }
+                        break;
+                    }
                     Err(next_prev) => {
                         current = next_prev;
                     }
