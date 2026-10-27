@@ -5,7 +5,7 @@ use std::{
 };
 
 mod sync;
-use crate::sync::{Acquire, AtomicIsize, Relaxed, Release, UnsafeCell, fence, spin_loop};
+use crate::sync::{Acquire, AtomicIsize, Relaxed, Release, UnsafeCell, spin_loop};
 
 pub struct Rw<T> {
     data: UnsafeCell<T>,
@@ -24,7 +24,8 @@ impl<T> Rw<T> {
     }
 
     pub fn read<'read>(&'read self) -> RwReadGuard<'read, T> {
-        let mut current = self.counter.load(Relaxed);
+        // TODO: only Acquire on a `0`.
+        let mut current = self.counter.load(Acquire);
         loop {
             if current < 0 {
                 current = self.counter.load(Relaxed);
@@ -33,12 +34,7 @@ impl<T> Rw<T> {
                     .counter
                     .compare_exchange_weak(current, current + 1, Relaxed, Relaxed)
                 {
-                    Ok(v) => {
-                        if v == 1 {
-                            fence(Acquire);
-                        }
-                        break;
-                    }
+                    Ok(_) => break,
                     Err(next_prev) => {
                         current = next_prev;
                     }
@@ -103,7 +99,13 @@ impl<T> Drop for RwReadGuard<'_, T> {
                     .counter
                     .compare_exchange_weak(current, current - 1, Relaxed, Relaxed)
                 {
-                    Ok(_) => break,
+                    Ok(_prev_value) => {
+                        // we don't need this due to coherence, also this placement would have been incorrect.
+                        // if prev_value == 1 {
+                        //     fence(Release);
+                        // }
+                        // break;
+                    },
                     Err(new) => current = new,
                 }
             }
