@@ -94,18 +94,13 @@ impl<T> Drop for RwReadGuard<'_, T> {
             if current < 0 {
                 current = self.rw.counter.load(Relaxed);
             } else {
+                // TODO: we only have to release on 1.
                 match self
                     .rw
                     .counter
-                    .compare_exchange_weak(current, current - 1, Relaxed, Relaxed)
+                    .compare_exchange_weak(current, current - 1, Release, Relaxed)
                 {
-                    Ok(_prev_value) => {
-                        // we don't need this due to coherence, also this placement would have been incorrect.
-                        // if prev_value == 1 {
-                        //     fence(Release);
-                        // }
-                        // break;
-                    },
+                    Ok(_prev_value) => break,
                     Err(new) => current = new,
                 }
             }
